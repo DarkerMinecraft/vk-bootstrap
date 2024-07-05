@@ -33,35 +33,38 @@
 #include <mutex>
 #include <algorithm>
 
+#include "VkBootstrapFeatureChain.h"
+
 namespace vkb {
 
 namespace detail {
 
-GenericFeaturesPNextNode::GenericFeaturesPNextNode() { memset(fields, UINT8_MAX, sizeof(VkBool32) * field_capacity); }
+// GenericFeaturesPNextNode::GenericFeaturesPNextNode() { memset(fields, UINT8_MAX, sizeof(VkBool32) * field_capacity); }
 
-bool GenericFeaturesPNextNode::match(GenericFeaturesPNextNode const& requested, GenericFeaturesPNextNode const& supported) noexcept {
-    assert(requested.sType == supported.sType && "Non-matching sTypes in features nodes!");
-    for (uint32_t i = 0; i < field_capacity; i++) {
-        if (requested.fields[i] && !supported.fields[i]) return false;
-    }
-    return true;
-}
+// bool GenericFeaturesPNextNode::match(GenericFeaturesPNextNode const& requested, GenericFeaturesPNextNode const& supported) noexcept {
+//     assert(requested.sType == supported.sType && "Non-matching sTypes in features nodes!");
+//     for (uint32_t i = 0; i < field_capacity; i++) {
+//         if (requested.fields[i] && !supported.fields[i]) return false;
+//     }
+//     return true;
+// }
 
-void GenericFeaturesPNextNode::combine(GenericFeaturesPNextNode const& right) noexcept {
-    assert(sType == right.sType && "Non-matching sTypes in features nodes!");
-    for (uint32_t i = 0; i < GenericFeaturesPNextNode::field_capacity; i++) {
-        fields[i] = fields[i] || right.fields[i];
-    }
-}
+// void GenericFeaturesPNextNode::combine(GenericFeaturesPNextNode const& right) noexcept {
+//     assert(sType == right.sType && "Non-matching sTypes in features nodes!");
+//     for (uint32_t i = 0; i < GenericFeaturesPNextNode::field_capacity; i++) {
+//         fields[i] = fields[i] || right.fields[i];
+//     }
+// }
 
 bool GenericFeatureChain::match_all(GenericFeatureChain const& extension_requested) const noexcept {
     // Should only be false if extension_supported was unable to be filled out, due to the
     // physical device not supporting vkGetPhysicalDeviceFeatures2 in any capacity.
-    if (extension_requested.nodes.size() != nodes.size()) {
+    if (extension_requested.struct_info.size() != struct_info.size()) {
         return false;
     }
 
-    for (size_t i = 0; i < nodes.size() && i < nodes.size(); ++i) {
+    for (size_t i = 0; i < struct_info.size() && i < struct_info.size(); ++i) {
+
         if (!GenericFeaturesPNextNode::match(extension_requested.nodes[i], nodes[i])) return false;
     }
     return true;

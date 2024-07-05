@@ -159,39 +159,36 @@ template <typename T> class Result {
 };
 
 namespace detail {
-struct GenericFeaturesPNextNode {
 
-    static const uint32_t field_capacity = 256;
-
-    GenericFeaturesPNextNode();
-
-    template <typename T> GenericFeaturesPNextNode(T const& features) noexcept {
-        memset(fields, UINT8_MAX, sizeof(VkBool32) * field_capacity);
-        memcpy(this, &features, sizeof(T));
-    }
-
-    static bool match(GenericFeaturesPNextNode const& requested, GenericFeaturesPNextNode const& supported) noexcept;
-
-    void combine(GenericFeaturesPNextNode const& right) noexcept;
-
-    VkStructureType sType = static_cast<VkStructureType>(0);
-    void* pNext = nullptr;
-    VkBool32 fields[field_capacity];
-};
+bool compare_features_struct(const VkStructureType sType, const void* requested, const void* supported);
+void merge_features_struct(const VkStructureType sType, void* requested, void* supported);
 
 struct GenericFeatureChain {
-    std::vector<GenericFeaturesPNextNode> nodes;
+    struct StructInfo {
+        VkStructureType sType{};
+        size_t starting_location{};
+    };
+
+    std::vector<StructInfo> struct_info;
+    std::vector<char> struct_storage;
 
     template <typename T> void add(T const& features) noexcept {
         // If this struct is already in the list, combine it
-        for (auto& node : nodes) {
-            if (static_cast<VkStructureType>(features.sType) == node.sType) {
-                node.combine(features);
+        for (auto& info : struct_info) {
+            if (static_cast<VkStructureType>(features.sType) == info.sType) {
+                merge_features_struct(info.sType, &struct_storage[info.starting_location], static_cast<void*>(&features));
                 return;
             }
         }
+
         // Otherwise append to the end
-        nodes.push_back(features);
+        StructInfo new_struct_info{};
+        new_struct_info.sType = static_cast<VkStructureType>(features.sType);
+        new_struct_info.starting_location = struct_storage.size();
+
+        struct_info.push_back(new_struct_info);
+        struct_storage.resize(struct_storage.size() + sizeof(features));
+        memcpy(&struct_storage[new_struct_info.starting_location], &features, sizeof(features));
     }
 
     bool match_all(GenericFeatureChain const& extension_requested) const noexcept;

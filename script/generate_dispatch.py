@@ -174,54 +174,74 @@ for aliased_type, alias in aliases.items():
         commands[alias] = copy.deepcopy(commands[aliased_type])
         commands[alias]['is_alias'] = True
 
+features_structs = {}
+
+# Get all of the Features chain struct bool counts
+for node in types_node:
+    if '@structextends' in node and 'VkPhysicalDeviceFeatures2' in node['@structextends']:
+        features_structs[node['@name']] = node
+        features_structs[node['@name']]['requirements'] = []
+
 # Add requirements for core PFN's
 features_node = vk_xml['registry']['feature']
 for feature_node in features_node:
     if feature_node['@name'] != 'VK_VERSION_1_0':
         for require_node in feature_node['require']:
             for param_node in require_node:
+                if not isinstance(require_node[param_node], list):
+                    require_node[param_node] = [require_node[param_node]]
                 if param_node == 'command':
-                    if not isinstance(require_node[param_node], list):
-                        require_node[param_node] = [require_node[param_node]]
                     for param in require_node[param_node]:
                         if param['@name'] in commands:
                             commands[param['@name']]['requirements'] += [[feature_node['@name']]]
+                if param_node == 'type':
+                    for param in require_node[param_node]:
+                        if param['@name'] in features_structs:
+                            features_structs[param['@name']]['requirements'] += [[feature_node['@name']]]
+
+extensions_node = vk_xml['registry']['extensions']['extension']
+# Fixup extensions_node to make require always be a list of dicts
+for extension_node in extensions_node:
+    extension_name = extension_node['@name']
+
+    if 'require' not in extension_node.keys():
+        continue
+    if not isinstance(extension_node['require'], list):
+        extension_node['require'] = [extension_node['require']]
 
 
-# Add requirements for extension PFN's
+# Add requirements for extension PFN's and features chain struct
 extensions_node = vk_xml['registry']['extensions']['extension']
 for extension_node in extensions_node:
     extension_name = extension_node['@name']
-    if 'require' in extension_node.keys():
-        require_nodes = extension_node['require']
-        for require_node in require_nodes:
-            requirements = [extension_name]
-            if not isinstance(require_node, str):
-                if 'command' in require_node.keys():
-                    if '@feature' in require_node.keys():
-                        requirements.append(require_node['@feature'])
-                    if '@extension' in require_node.keys():
-                        requirements.extend(require_node['@extension'].split(','))
-                    if not isinstance(require_node['command'], list):
-                        require_node['command'] = [require_node['command']]
-                    for command_node in require_node['command']:
-                        if command_node['@name'] in commands:
-                            if '@author' in extension_node and extension_node['@author'] in excluded_extension_authors:
-                                commands.pop(command_node['@name'])
-                            else:
-                                commands[command_node['@name']]['requirements'] += [requirements]
-            elif require_node == 'command':
-                if not isinstance(require_nodes['command'], list):
-                    require_nodes['command'] = [require_nodes['command']]
-                for command_node in require_nodes['command']:
+    if 'require' not in extension_node.keys():
+        continue
+    for require_node in extension_node['require']:
+        requirements = [extension_name]
+        if '@feature' in require_node.keys():
+            requirements.append(require_node['@feature'])
+        if '@extension' in require_node.keys():
+            requirements.extend(require_node['@extension'].split(','))
+        for require_node_key, require_node_values in require_node.items():
+            if not isinstance(require_node_values, list):
+                require_node_values = [require_node_values]
+            if require_node_key == 'command' :
+                for command_node in require_node_values:
                     if command_node['@name'] in commands:
                         if '@author' in extension_node and extension_node['@author'] in excluded_extension_authors:
                             commands.pop(command_node['@name'])
                         else:
                             commands[command_node['@name']]['requirements'] += [requirements]
+            if require_node_key == 'type':
+                for type_node in require_node_values:
+                    if type_node['@name'] in features_structs:
+                        if '@author' in extension_node and extension_node['@author'] in excluded_extension_authors:
+                            features_structs.pop(type_node['@name'])
+                        else:
+                            features_structs[type_node['@name']]['requirements'] += [requirements]
 
 # Generate macro templates
-for command_name, command in commands.items():
+for command_name in commands:
     if len(commands[command_name]['requirements']) > 0:
         macro_guard = get_macro_guard(commands[command_name]['requirements'], command_name)
         macro = f'#if {macro_guard}\n$body#endif\n'
@@ -229,7 +249,7 @@ for command_name, command in commands.items():
         macro = '$body'
     commands[command_name]['macro_template'] = Template(macro)
 
-for command_name, command in commands.items():
+for command_name in commands:
     if len(commands[command_name]['requirements']) > 0:
         macro_guard = get_macro_guard(commands[command_name]['requirements'], command_name)
         pfn_decl_macro = f'#if {macro_guard}\n$body#else\n    void * fp_{command_name}{{}};\n#endif\n'
@@ -391,6 +411,48 @@ def create_dispatch_table(dispatch_type):
     out += '};\n\n'
     return out
 
+def generate_feature_struct_chain():
+    out = ''
+
+    for struct_details in features_structs.values():
+        if len(struct_details['requirements']) > 0:
+            out += f'#if {get_macro_guard(struct_details['requirements'], struct_details['@name'])}\n'
+        out += f'inline bool compare_features_struct({struct_details['@name']} const& requested, {struct_details['@name']} const& supported) {{\n'
+        for member in struct_details['member'][2:]:
+            out += f'    if (requested.{member['name']} && !supported.{member['name']}) return false;\n'
+        out += '    return true;\n'
+        out += '}\n'
+        out += f'inline void merge_features_struct({struct_details['@name']} & dest, {struct_details['@name']} const& to_add) {{\n'
+        for member in struct_details['member'][2:]:
+            out += f'    dest.{member['name']} = dest.{member['name']} || to_add.{member['name']};\n'
+        out += '}\n'
+        if len(struct_details['requirements']) > 0:
+            out += '#endif\n'
+
+    out += 'inline bool compare_features_struct(const VkStructureType sType, const void* requested, const void* supported) {\n'
+    out += '    switch (sType){\n'
+    for struct_details in features_structs.values():
+        if len(struct_details['requirements']) > 0:
+            out += f'#if {get_macro_guard(struct_details['requirements'], struct_details['@name'])}\n'
+        out += f'        case({struct_details['member'][0]['@values']}): return compare_features_struct(*static_cast<const {struct_details['@name']}*>(requested), *static_cast<const {struct_details['@name']}*>(supported));\n'
+        if len(struct_details['requirements']) > 0:
+            out += '#endif\n'
+    out += '    default: return false;\n'
+    out += '    }\n'
+    out += '}\n'
+    out += 'inline void merge_features_struct(const VkStructureType sType, void* requested, void* supported) {\n'
+    out += '    switch (sType){\n'
+    for struct_details in features_structs.values():
+        if len(struct_details['requirements']) > 0:
+            out += f'#if {get_macro_guard(struct_details['requirements'], struct_details['@name'])}\n'
+        out += f'        case({struct_details['member'][0]['@values']}): merge_features_struct(*static_cast<{struct_details['@name']}*>(requested), *static_cast<{struct_details['@name']}*>(supported));\n'
+        if len(struct_details['requirements']) > 0:
+            out += '#endif\n'
+    out += '    default: return; // unknown struct, do nothing\n'
+    out += '    }\n'
+    out += '}\n'
+    return out
+
 tail = '} // namespace vkb'
 
 # find the version used to generate the code
@@ -414,6 +476,10 @@ if not os.path.exists(path_to_src):
 header_file = codecs.open(os.path.join(path_to_src,'VkBootstrapDispatch.h'), 'w', 'utf-8')
 header_file.write(dispatch_license + info + head + create_dispatch_table('instance') + create_dispatch_table('device') + tail)
 header_file.close()
+
+feature_struct_file = codecs.open(os.path.join(path_to_src,'VkBootstrapFeatureChain.h'), 'w', 'utf-8')
+feature_struct_file.write(dispatch_license + info + head + generate_feature_struct_chain() + tail)
+feature_struct_file.close()
 
 path_to_gen = os.path.join('gen')
 if not os.path.exists(path_to_gen):

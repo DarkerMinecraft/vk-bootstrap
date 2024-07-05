@@ -84,7 +84,7 @@ if(NOT VK_BOOTSTRAP_DISABLE_WARNINGS)
     endif()
 endif()
 
-add_library(vk-bootstrap STATIC src/VkBootstrap.h src/VkBootstrap.cpp src/VkBootstrapDispatch.h)
+add_library(vk-bootstrap STATIC src/VkBootstrap.h src/VkBootstrap.cpp src/VkBootstrapDispatch.h src/VkBootstrapFeatureChain.h)
 add_library(vk-bootstrap::vk-bootstrap ALIAS vk-bootstrap)
 
 target_include_directories(vk-bootstrap PUBLIC
